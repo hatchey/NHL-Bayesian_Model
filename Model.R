@@ -1,77 +1,41 @@
 library(rstan)
 
-team_levels <- unique(c(nhl_game_stats$home_abbreviation, nhl_game_stats$away_abbreviation))
+player_levels <- unique(nhl_game_stats$player_id)
 
 nhl_stan_data <- list(
   N = nrow(nhl_game_stats),
-  T = length(unique(c(nhl_game_stats$home_abbreviation, nhl_game_stats$away_abbreviation))),
-  S = length(unique(nhl_game_stats$season)),
-  home_team = as.numeric(factor(nhl_game_stats$home_abbreviation, levels = team_levels)),
-  away_team = as.numeric(factor(nhl_game_stats$away_abbreviation, levels = team_levels)),
-  home_goals = nhl_game_stats$home_es_goals + nhl_game_stats$home_pp_goals + nhl_game_stats$home_sh_goals + nhl_game_stats$home_ot_goals,
-  away_goals = nhl_game_stats$away_es_goals + nhl_game_stats$away_pp_goals + nhl_game_stats$away_sh_goals + nhl_game_stats$away_ot_goals,
-  season = as.numeric(as.factor(nhl_game_stats$season))
+  P = length(unique(nhl_game_stats$player_id)),
+  player = as.numeric(factor(nhl_game_stats$player_id, levels = player_levels)),
+  goals = nhl_game_stats$goals,
+  shots = nhl_game_stats$shots,
+  alpha = 3.973,
+  beta = 39.032
 )
 
 nhl_stan_model <- "
 data {
   int<lower=1> N; // Number of games
-  int<lower=1> T; // Number of teams
-  int<lower=1> S; // Number of seasons
-  int home_team[N]; // Home team index
-  int away_team[N]; // Away team index
-  int home_goals[N]; // Actual goals scored by home team
-  int away_goals[N]; // Actual goals scored by away team
-  int season[N]; // Season index for each game
+  int<lower=1> P; // Number of players
+  int player[N]; // Player Id
+  int goals[N]; // Goals scored by player
+  int shots[N]; // Shots taken by player
+  real<lower=0> alpha; // Alpha parameter for Beta prior
+  real<lower=0> beta; // Beta parameter for Beta prior
 }
 
 parameters {
-  real home_advantage[S]; // Home advantage per season
-  real goal_mean[S]; // Goal mean per season
-  real<lower=0> sigma_att;
-  real<lower=0> sigma_def;
-  matrix[S, T] att_raw;
-  matrix[S, T] def_raw;
-}
-
-transformed parameters {
-  matrix[S, T] att;
-  matrix[S, T] def;
-
-  // Centering xG to remove team effects
-  for (s in 1:S) {
-    att[s] = att_raw[s] - mean(att_raw[s]);
-    def[s] = def_raw[s] - mean(def_raw[s]);
-  }
+  real<lower=0, upper=1> p[N];  // Player-specific success probabilities
+  real<lower=0> r;              // Shape parameter for Negative Binomial
 }
 
 model {
   // Priors
-  for (s in 1:S) {
-    home_advantage[s] ~ normal(0, 1);
-    goal_mean[s] ~ normal(0, 1);
-    sigma_att ~ normal(0, 1);
-    sigma_def ~ normal(0, 1);
-    att_raw[s] ~ normal(0, sigma_att);
-    def_raw[s] ~ normal(0, sigma_def);
-  }
+  p ~ beta(alpha, beta);
+  r ~ exponential(0.4);
 
   // Likelihood: Model actual goals using Poisson distribution with log link
   for (i in 1:N) {
-    // Home team's goals
-    home_goals[i] ~ poisson_log(
-      home_advantage[season[i]] + 
-      att[season[i], home_team[i]] + 
-      def[season[i], away_team[i]] + 
-      goal_mean[season[i]]
-    );
-    
-    // Away team's goals
-    away_goals[i] ~ poisson_log(
-      att[season[i], away_team[i]] + 
-      def[season[i], home_team[i]] + 
-      goal_mean[season[i]]
-    );
+    goals[i] ~ neg_binomial_2(shots[i] * p[i], r);
   }
 }
 "

@@ -1,83 +1,60 @@
 library(hockeyR)
 library(dplyr)
 library(tidyr)
+library(ggplot2)
+library(MASS)
 
 
 nhl_pbp <- hockeyR::load_pbp(season = 2015:2023)
 
 nhl_game_stats <- nhl_pbp %>%
-  dplyr::filter(season_type == 'R') %>%
-  dplyr::group_by(season, game_id, home_abbreviation, away_abbreviation) %>%
+  dplyr::filter(season_type == 'R', strength_code %in% c('EV', 'EVEN'), season %in% c('20212022', '20202021', '20222023')) %>%
+  dplyr::group_by(season, game_id, event_player_1_id, event_player_1_name) %>%
   dplyr::summarize(
-    home_es_xg = sum(xg[strength_code %in% c('EV', 'EVEN') & period %in% c(1:3) & home_abbreviation == event_team_abbr], na.rm = TRUE),
-    home_pp_xg = sum(xg[strength_code %in% c('PPG', 'PP') & period %in% c(1:3) & home_abbreviation == event_team_abbr], na.rm = TRUE),
-    home_sh_xg = sum(xg[strength_code %in% c('SHG', 'SH') & period %in% c(1:3) & home_abbreviation == event_team_abbr], na.rm = TRUE),
-    home_ot_xg = sum(xg[!(period %in% c(1:3)) & home_abbreviation == event_team_abbr], na.rm = TRUE),
-    away_es_xg = sum(xg[strength_code %in% c('EV', 'EVEN') & period %in% c(1:3) & away_abbreviation == event_team_abbr], na.rm = TRUE),
-    away_pp_xg = sum(xg[strength_code %in% c('PPG', 'PP') & period %in% c(1:3) & away_abbreviation == event_team_abbr], na.rm = TRUE),
-    away_sh_xg = sum(xg[strength_code %in% c('SHG', 'SH') & period %in% c(1:3) & away_abbreviation == event_team_abbr], na.rm = TRUE),
-    away_ot_xg = sum(xg[!(period %in% c(1:3)) & away_abbreviation == event_team_abbr], na.rm = TRUE),
-    home_es_goals = sum(event_type == "GOAL" & strength_code %in% c('EV', 'EVEN') & period %in% c(1:3) & home_abbreviation == event_team_abbr, na.rm = TRUE),
-    home_pp_goals = sum(event_type == "GOAL" & strength_code %in% c('PPG', 'PP') & period %in% c(1:3) & home_abbreviation == event_team_abbr, na.rm = TRUE),
-    home_sh_goals = sum(event_type == "GOAL" & strength_code %in% c('SHG', 'SH') & period %in% c(1:3) & home_abbreviation == event_team_abbr, na.rm = TRUE),
-    home_ot_goals = sum(event_type == "GOAL" & !(period %in% c(1:3)) & home_abbreviation == event_team_abbr, na.rm = TRUE),
-    away_es_goals = sum(event_type == "GOAL" & strength_code %in% c('EV', 'EVEN') & period %in% c(1:3) & away_abbreviation == event_team_abbr, na.rm = TRUE),
-    away_pp_goals = sum(event_type == "GOAL" & strength_code %in% c('PPG', 'PP') & period %in% c(1:3) & away_abbreviation == event_team_abbr, na.rm = TRUE),
-    away_sh_goals = sum(event_type == "GOAL" & strength_code %in% c('SHG', 'SH') & period %in% c(1:3) & away_abbreviation == event_team_abbr, na.rm = TRUE),
-    away_ot_goals = sum(event_type == "GOAL" & !(period %in% c(1:3)) & away_abbreviation == event_team_abbr, na.rm = TRUE),
+    goals = sum(event_type == "GOAL" & period %in% c(1:3), na.rm = TRUE),
+    shots = sum(event_type == "SHOT" & period %in% c(1:3), na.rm = TRUE),
     .groups = "drop"
-  )
+  ) %>%
+  dplyr::rename(player_id = event_player_1_id,
+                player_name = event_player_1_name) %>%
+  dplyr::filter(!is.na(player_id), shots > 0)
 
-teams <- unique(c(nhl_game_stats$home_abbreviation, nhl_game_stats$away_abbreviation))
-team_ids <- setNames(seq_along(teams), teams)
+players <- unique(nhl_pbp$event_player_1_id)
+player_ids <- setNames(seq_along(players), players)
 
 
 nhl_stats <- nhl_game_stats %>%
-  dplyr::group_by(season, home_abbreviation) %>%
-  dplyr::summarize(xg_for = sum(home_es_xg + home_pp_xg + home_sh_xg + home_ot_xg, na.rm = TRUE),
-                   xg_against = sum(away_es_xg + away_pp_xg + away_sh_xg + home_ot_xg, na.rm = TRUE),
-                   goals_for = sum(home_es_goals + home_pp_goals + home_sh_goals + home_ot_goals, na.rm = TRUE),
-                   goals_against = sum(away_es_goals + away_pp_goals + away_sh_goals + home_ot_goals, na.rm = TRUE)) %>%
-  dplyr::rename(team = home_abbreviation) %>%
-  base::rbind(nhl_game_stats %>%
-                dplyr::group_by(season, away_abbreviation) %>%
-                dplyr::summarize(xg_for = sum(away_es_xg + home_pp_xg + home_sh_xg + home_ot_xg, na.rm = TRUE),
-                                 xg_against = sum(home_es_xg + away_pp_xg + away_sh_xg + home_ot_xg, na.rm = TRUE),
-                                 goals_for = sum(away_es_goals + home_pp_goals + home_sh_goals + home_ot_goals, na.rm = TRUE),
-                                 goals_against = sum(home_es_goals + away_pp_goals + away_sh_goals + home_ot_goals, na.rm = TRUE)) %>%
-                dplyr::rename(team = away_abbreviation)) %>%
-  dplyr::group_by(team, season) %>%
-  dplyr::summarize(xg_for = sum(xg_for, na.rm = TRUE), 
-                   xg_against = sum(xg_against, na.rm = TRUE),
-                   goals_for = sum(goals_for, na.rm = TRUE), 
-                   goals_against = sum(goals_against, na.rm = TRUE)) %>%
-  dplyr::mutate(xg_diff = xg_for - xg_against,
-                xg_diff_g = xg_diff / 82,
-                goals_diff = goals_for - goals_against,
-                goals_diff_g = goals_diff / 82) %>%
-  dplyr::ungroup() %>%
-  dplyr::group_by(season) %>%
-  dplyr::mutate(league_avg_xg_for = mean(xg_for) / 82, 
-                league_avg_xg_against = mean(xg_against) / 82,
-                league_avg_goals_for = mean(goals_for) / 82,
-                league_avg_goals_against = mean(goals_against) / 82) %>%
-  dplyr::ungroup() %>%
-  dplyr::mutate(exp_xg_for = league_avg_xg_for + (xg_diff_g / 2),
-                exp_xg_against = league_avg_xg_for + (xg_diff_g / 2),
-                exp_goals_for = league_avg_goals_for + (goals_diff_g / 2),
-                exp_goals_against = league_avg_goals_against + (goals_diff_g / 2))
+  dplyr::filter(season %in% c('20212022', '20202021', '20222023')) %>%
+  dplyr::group_by(player_id, player_name) %>%
+  dplyr::summarize(goals_for = sum(goals, na.rm = TRUE),
+                   shots_for = sum(shots, na.rm = TRUE)) %>%
+  dplyr::filter(shots_for > 100) %>%
+  dplyr::mutate(shooting_percentage = goals_for / shots_for) %>%
+  dplyr::ungroup()
 
-nhl_stats_2022 <- nhl_stats %>% 
-  dplyr::filter(season == '20222023')
+shooting_mean <- mean(nhl_stats$shooting_percentage, na.rm = TRUE)
+shooting_var <- var(nhl_stats$shooting_percentage, na.rm = TRUE)
+  
+nhl_top_20_shooting_percentage <- nhl_stats %>%
+  dplyr::arrange(desc(shooting_percentage)) %>%
+  utils::head(20)
 
-ggplot(nhl_stats_2022, aes(x = reorder(team, goals_diff), y = goals_diff, fill = goals_diff)) +
+nb_fit <- fitdistr(nhl_stats$goals_for, "Negative Binomial")
+
+
+r <- nb_fit$estimate["size"]
+
+
+list(r = r)
+
+ggplot(nhl_top_20_shooting_percentage, aes(x = player_name, y = shooting_percentage, fill = shooting_percentage)) +
   geom_bar(stat = 'identity') + 
   scale_fill_viridis_c(option = 'G', direction = -1) +
   coord_flip() + 
-  labs(title = 'NHL Team Goal Difference',
-       x = 'Team',
-       y = 'Goal Difference Per Game',
-       fill = 'Goal Difference') +
+  labs(title = 'NHL Player Shooting Percentage',
+       x = 'Player',
+       y = 'Shooting Percentage',
+       fill = 'Shooting Percentage') +
   theme_minimal() + 
   theme(legend.position = 'none')
 
