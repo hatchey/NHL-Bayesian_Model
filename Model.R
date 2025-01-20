@@ -51,3 +51,4 @@ fit <- stan(
   init = "random",
   control = list(max_treedepth = 10))
 
+saveRDS(fit, file = "fitted_stan_model.rds")
